@@ -24,17 +24,41 @@ if banco_seleccionado == "BCP (Texto)":
     texto_pegado = st.text_area("📝 Pega los movimientos de BCP aquí:", height=200)
     if st.button("🔍 Extraer", type="primary") and texto_pegado:
         meses_bcp = {"ENE": "01", "FEB": "02", "MAR": "03", "ABR": "04", "MAY": "05", "JUN": "06", "JUL": "07", "AGO": "08", "SEP": "09", "OCT": "10", "NOV": "11", "DIC": "12"}
-        for linea in texto_pegado.split('\n'):
-            match = re.search(r'^(\d{2})([a-zA-Z]{3})\s+\d{2}[a-zA-Z]{3}\s+(.*?)\s+([\d\.,]+)\s*$', linea.strip())
+        for linea_raw in texto_pegado.split('\n'):
+            linea = linea_raw.rstrip('\r') # Evitamos caracteres invisibles raros
+            
+            # Expresión regular que captura el texto y respeta los espacios al final
+            match = re.search(r'^(\d{2})([a-zA-Z]{3})\s+\d{2}[a-zA-Z]{3}\s+(.*?)\s+([\d\.,]+)(\s*)$', linea)
             if match:
-                dia, mes_texto, desc_raw, monto_str = match.groups()
+                dia, mes_texto, desc_raw, monto_str, espacios_finales = match.groups()
                 monto = float(monto_str.replace(',', ''))
                 if monto == 0: continue
+                
                 desc_raw = re.sub(r'\s+[\*1]\s*$', '', desc_raw).strip()
-                es_ingreso = any(k in desc_raw.upper() for k in ["YAPE DE", "ABON", "TRANSF.BCO", "DEPOSITO", "DE OTRA CUENTA"])
-                tipo, cat, desc = aplicar_reglas(desc_raw, monto, "Ingreso" if es_ingreso else "Gasto")
-                movs_extraidos.append({"fecha": f"2026-{meses_bcp.get(mes_texto.upper(), '01')}-{dia}", "tipo": tipo, "categoria": cat, "descripcion": desc, "monto": monto, "origen": "Texto BCP"})
-
+                
+                # 🌟 MAGIA ESPACIAL: Determinamos si es Ingreso o Gasto por su posición visual
+                if len(espacios_finales) > 5:
+                    tipo_ini = "Gasto"
+                else:
+                    tipo_ini = "Ingreso"
+                    
+                # Refuerzo por si acaso el texto copiado perdió el formato
+                if "YAPE DE" in desc_raw.upper() or "DEPOSITO" in desc_raw.upper():
+                    tipo_ini = "Ingreso"
+                    
+                # Pasamos los datos por el motor
+                tipo, cat, desc = aplicar_reglas(desc_raw, monto, tipo_ini)
+                fecha_str = f"2026-{meses_bcp.get(mes_texto.upper(), '01')}-{dia}"
+                
+                movs_extraidos.append({
+                    "fecha": fecha_str, 
+                    "tipo": tipo, 
+                    "categoria": cat, 
+                    "descripcion": desc, 
+                    "monto": monto, 
+                    "origen": "Texto BCP"
+                })
+                
 elif banco_seleccionado == "Banbif (Lector de PDF)":
     archivos_pdf = st.file_uploader("📄 Sube PDFs de Banbif", type=["pdf"], accept_multiple_files=True)
     if st.button("🔍 Extraer", type="primary") and archivos_pdf:
