@@ -85,3 +85,55 @@ if not df_filtrado.empty:
     
 else:
     st.info("No hay movimientos registrados para este periodo.")
+
+st.divider()
+st.markdown("### 🧾 Cuadre por Archivo de Origen")
+st.markdown("Audita la cantidad de movimientos y los montos totales para cuadrar con tus PDFs originales.")
+
+if not df_filtrado.empty and 'origen' in df_filtrado.columns:
+    # 1. Agrupar para contar la cantidad de datos y sumar los montos
+    df_agrupado = df_filtrado.groupby(['origen', 'tipo']).agg(
+        cantidad=('monto', 'count'),
+        total_monto=('monto', 'sum')
+    ).unstack(fill_value=0)
+    
+    # 2. Aplanar y organizar las columnas
+    df_agrupado.columns = ['_'.join(col).strip() for col in df_agrupado.columns.values]
+    df_agrupado = df_agrupado.reset_index()
+
+    # 3. Construir la tabla limpia
+    df_cuadre = pd.DataFrame()
+    df_cuadre['origen'] = df_agrupado['origen']
+    
+    # Manejar los datos por si algún PDF no tiene ingresos o no tiene gastos
+    ingresos_cant = df_agrupado['cantidad_Ingreso'] if 'cantidad_Ingreso' in df_agrupado.columns else 0
+    gastos_cant = df_agrupado['cantidad_Gasto'] if 'cantidad_Gasto' in df_agrupado.columns else 0
+    
+    df_cuadre['Movimientos'] = ingresos_cant + gastos_cant
+    df_cuadre['Ingresos'] = df_agrupado['total_monto_Ingreso'] if 'total_monto_Ingreso' in df_agrupado.columns else 0.0
+    df_cuadre['Gastos'] = df_agrupado['total_monto_Gasto'] if 'total_monto_Gasto' in df_agrupado.columns else 0.0
+    
+    # 4. CREAR LA FILA DE TOTALES AL FONDO
+    fila_total = pd.DataFrame({
+        'origen': ['TOTAL GENERAL'],
+        'Movimientos': [df_cuadre['Movimientos'].sum()],
+        'Ingresos': [df_cuadre['Ingresos'].sum()],
+        'Gastos': [df_cuadre['Gastos'].sum()]
+    })
+    
+    df_cuadre = pd.concat([df_cuadre, fila_total], ignore_index=True)
+    
+    # 5. Mostrar la tabla con un diseño compacto
+    st.dataframe(
+        df_cuadre,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "origen": st.column_config.TextColumn("Archivo / Origen de Datos"),
+            "Movimientos": st.column_config.NumberColumn("N° de Movimientos"),
+            "Ingresos": st.column_config.NumberColumn("Total Ingresos (Abonos)", format="S/ %.2f"),
+            "Gastos": st.column_config.NumberColumn("Total Gastos (Cargos)", format="S/ %.2f")
+        }
+    )
+else:
+    st.info("No hay datos suficientes en este periodo para realizar el cuadre.")

@@ -12,7 +12,12 @@ if 'deuda_a_borrar' not in st.session_state: st.session_state.deuda_a_borrar = N
 st.subheader("💳 Control de Deudas")
 
 conn = conectar_bd()
-df_deudas = pd.read_sql("SELECT * FROM deudas", conn)
+cur = conn.cursor()
+cur.execute("SELECT * FROM deudas")
+columnas = [desc[0] for desc in cur.description]
+datos = cur.fetchall()
+df_deudas = pd.DataFrame(datos, columns=columnas)
+cur.close()
 conn.close()
 
 st.markdown("""

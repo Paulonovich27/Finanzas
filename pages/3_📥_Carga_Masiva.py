@@ -2,97 +2,142 @@
 import streamlit as st
 import pandas as pd
 import re
+import time
 from datetime import datetime
 from config import CATEGORIAS_GASTOS, CATEGORIAS_INGRESOS_BASE, CATEGORIAS_AHORRO, obtener_periodo
 from database import conectar_bd
+import pdfplumber
+
+# IMPORTAMOS EL MOTOR SEPARADO
+from motor_reglas import aplicar_reglas
 
 st.set_page_config(page_title="Carga Masiva", page_icon="📥", layout="wide")
+st.subheader("📥 Carga Rápida Inteligente")
 
-st.subheader("📥 Carga Rápida Inteligente (BCP)")
-st.markdown("Copia y pega las líneas de tu estado de cuenta del BCP.")
+banco_seleccionado = st.radio("🏦 Selecciona el Banco:", ["BCP (Texto)", "Banbif (Lector de PDF)", "BBVA (Lector de PDF)"], horizontal=True)
+movs_extraidos = []
 
-texto_pegado = st.text_area("Pega los movimientos de tu PDF aquí:", height=250)
-
-if st.button("🔍 Leer y Procesar Texto", type="primary"):
-    if texto_pegado:
-        lineas = texto_pegado.split('\n')
-        movs_extraidos = []
-        meses_bcp = {"ENE": "01", "FEB": "02", "MAR": "03", "ABR": "04", "MAY": "05", "JUN": "06",
-                     "JUL": "07", "AGO": "08", "SEP": "09", "OCT": "10", "NOV": "11", "DIC": "12"}
-        
-        for linea in lineas:
-            linea = linea.strip()
-            if not linea or "SALDO ANTERIOR" in linea: continue
-            
-            match = re.search(r'^(\d{2})([a-zA-Z]{3})\s+\d{2}[a-zA-Z]{3}\s+(.*?)\s+([\d\.,]+)\s*$', linea)
-            
+# ==========================================
+# LECTURA DE BANCOS
+# ==========================================
+if banco_seleccionado == "BCP (Texto)":
+    texto_pegado = st.text_area("📝 Pega los movimientos de BCP aquí:", height=200)
+    if st.button("🔍 Extraer", type="primary") and texto_pegado:
+        meses_bcp = {"ENE": "01", "FEB": "02", "MAR": "03", "ABR": "04", "MAY": "05", "JUN": "06", "JUL": "07", "AGO": "08", "SEP": "09", "OCT": "10", "NOV": "11", "DIC": "12"}
+        for linea in texto_pegado.split('\n'):
+            match = re.search(r'^(\d{2})([a-zA-Z]{3})\s+\d{2}[a-zA-Z]{3}\s+(.*?)\s+([\d\.,]+)\s*$', linea.strip())
             if match:
-                dia = match.group(1)
-                mes_texto = match.group(2).upper()
-                desc_raw = match.group(3).strip()
-                monto = float(match.group(4).replace(',', ''))
-                
+                dia, mes_texto, desc_raw, monto_str = match.groups()
+                monto = float(monto_str.replace(',', ''))
                 if monto == 0: continue
-                
-                desc = re.sub(r'\s+[\*1]\s*$', '', desc_raw).strip()
-                desc_upper = desc.upper()
-                
-                tipo = "Gasto"
-                categoria = "Otros Gastos" 
-                
-                if "YAPE DE" in desc_upper or "TRANSF.BCO" in desc_upper or "ABON" in desc_upper:
-                    tipo, categoria = "Ingreso", "Otros Ingresos"
-                elif "YAPE A" in desc_upper: categoria = "Prestamo Yape"
-                elif "ECONOMAX" in desc_upper or "MALL" in desc_upper or "TAI LOY" in desc_upper: categoria = "Supermercado"
-                elif "KURO KUMA" in desc_upper or "OXXO" in desc_upper: categoria = "Comida"
-                elif "NETFLIX" in desc_upper or "YOUTUBE" in desc_upper or "CRUNCHYROLL" in desc_upper: categoria = "Internet"
-                elif "CLAR0" in desc_upper or "TELE0" in desc_upper: categoria = "Celular Paul"
-                elif "CALI0" in desc_upper: categoria = "Gas Pa"
-                elif "PLUZ" in desc_upper: categoria = "Luz"
-                elif "IMPUEST" in desc_upper: categoria = "Otros Gastos"
-                elif "WARDA" in desc_upper: tipo, categoria = "Ahorro", "Fondo de Emergencia"
-                    
-                mes_num = meses_bcp.get(mes_texto, "01")
-                fecha_str = f"2026-{mes_num}-{dia}"
-                
-                movs_extraidos.append({"fecha": fecha_str, "tipo": tipo, "categoria": categoria, "descripcion": desc, "monto": monto})
-        
-        if movs_extraidos:
-            st.session_state['staging_data'] = pd.DataFrame(movs_extraidos)
-            st.success(f"✅ Se clasificaron {len(movs_extraidos)} movimientos automáticamente.")
-        else:
-            st.error("No se detectó ningún movimiento. Verifica el formato.")
+                desc_raw = re.sub(r'\s+[\*1]\s*$', '', desc_raw).strip()
+                es_ingreso = any(k in desc_raw.upper() for k in ["YAPE DE", "ABON", "TRANSF.BCO", "DEPOSITO", "DE OTRA CUENTA"])
+                tipo, cat, desc = aplicar_reglas(desc_raw, monto, "Ingreso" if es_ingreso else "Gasto")
+                movs_extraidos.append({"fecha": f"2026-{meses_bcp.get(mes_texto.upper(), '01')}-{dia}", "tipo": tipo, "categoria": cat, "descripcion": desc, "monto": monto, "origen": "Texto BCP"})
 
-st.divider()
+elif banco_seleccionado == "Banbif (Lector de PDF)":
+    archivos_pdf = st.file_uploader("📄 Sube PDFs de Banbif", type=["pdf"], accept_multiple_files=True)
+    if st.button("🔍 Extraer", type="primary") and archivos_pdf:
+        with st.spinner("Procesando PDFs..."):
+            for archivo in archivos_pdf:
+                with pdfplumber.open(archivo) as pdf:
+                    for pagina in pdf.pages:
+                        if texto := pagina.extract_text():
+                            for linea in texto.split('\n'):
+                                match = re.search(r'^(\d{2}/\d{2}/\d{4})\s+(.*?)\s+([+-]?\s*[\d,]+\.\d{2})\s*$', linea.strip())
+                                if match:
+                                    f_raw, d_raw, m_str = match.groups()
+                                    monto = float(m_str.replace(',', '').replace(' ', ''))
+                                    if monto == 0: continue
+                                    tipo, cat, desc = aplicar_reglas(d_raw.strip(), abs(monto), "Ingreso" if monto > 0 else "Gasto")
+                                    fecha_str = datetime.strptime(f_raw, "%d/%m/%Y").strftime("%Y-%m-%d")
+                                    movs_extraidos.append({"fecha": fecha_str, "tipo": tipo, "categoria": cat, "descripcion": desc, "monto": abs(monto), "origen": archivo.name})
+
+elif banco_seleccionado == "BBVA (Lector de PDF)":
+    archivos_pdf = st.file_uploader("📄 Sube PDFs de BBVA", type=["pdf"], accept_multiple_files=True)
+    if st.button("🔍 Extraer", type="primary") and archivos_pdf:
+        with st.spinner("Procesando PDFs..."):
+            for archivo in archivos_pdf:
+                with pdfplumber.open(archivo) as pdf:
+                    for pagina in pdf.pages:
+                        if texto := pagina.extract_text():
+                            for linea in texto.split('\n'):
+                                match = re.search(r'^(\d{2}-\d{2})\s+\d{2}-\d{2}\s+(.*?)\s+(?:VEN|BMV|BTE|.*?)\s+\d+\s+([\d,]+\.\d{2}-?)\s*(?:[\d,]+\.\d{2})?\s*$', linea.strip())
+                                if match:
+                                    f_raw, d_raw, m_str = match.groups()
+                                    monto = float(m_str.replace('-', '').replace(',', ''))
+                                    if monto == 0: continue
+                                    tipo, cat, desc = aplicar_reglas(d_raw.strip(), monto, "Gasto" if m_str.endswith('-') else "Ingreso")
+                                    dia, mes = f_raw.split('-')
+                                    movs_extraidos.append({"fecha": f"2026-{mes}-{dia}", "tipo": tipo, "categoria": cat, "descripcion": desc, "monto": monto, "origen": archivo.name})
+
+# ==========================================
+# INTERFAZ CON BLOQUEO ANTI-ERRORES
+# ==========================================
+if movs_extraidos:
+    df_st = pd.DataFrame(movs_extraidos).sort_values(by="fecha", ascending=False)
+    st.session_state['staging_data'] = df_st
+    st.success(f"✅ {len(movs_extraidos)} movimientos procesados.")
 
 if 'staging_data' in st.session_state and not st.session_state['staging_data'].empty:
     st.markdown("### ✍️ Vista Previa y Edición")
-    df_editado = st.data_editor(
-        st.session_state['staging_data'], 
-        use_container_width=True,
-        column_config={
-            "tipo": st.column_config.SelectboxColumn("Tipo", options=["Gasto", "Ingreso", "Ahorro"], required=True),
-            "categoria": st.column_config.SelectboxColumn("Categoría", options=CATEGORIAS_GASTOS + CATEGORIAS_INGRESOS_BASE + CATEGORIAS_AHORRO, required=True),
-            "monto": st.column_config.NumberColumn("Monto", format="S/ %.2f", min_value=0.0)
-        }
-    )
     
-    c_bot1, c_bot2 = st.columns([1, 4])
-    if c_bot1.button("💾 Guardar Todo en Neon", type="primary"):
-        conn = conectar_bd()
-        cur = conn.cursor()
-        for _, row_fin in df_editado.iterrows():
+    # 🌟 TRUCO: Creamos un contenedor vacío que agrupará la tabla y los botones
+    zona_edicion = st.empty()
+    
+    # Metemos todo dentro del contenedor
+    with zona_edicion.container():
+        df_editado = st.data_editor(
+            st.session_state['staging_data'], 
+            use_container_width=True,
+            num_rows="dynamic",
+            column_config={
+                "tipo": st.column_config.SelectboxColumn("Tipo", options=["Gasto", "Ingreso", "Ahorro"], required=True),
+                "categoria": st.column_config.SelectboxColumn("Categoría", options=CATEGORIAS_GASTOS + CATEGORIAS_INGRESOS_BASE + CATEGORIAS_AHORRO, required=True),
+                "monto": st.column_config.NumberColumn("Monto", format="S/ %.2f", min_value=0.0),
+                "origen": st.column_config.TextColumn("Archivo Origen", disabled=True) # <-- ESTA LÍNEA
+            }
+        )
+        
+        c_bot1, c_bot2 = st.columns([1, 4])
+        btn_guardar = c_bot1.button("💾 Guardar Todo en Neon", type="primary")
+        btn_cancelar = c_bot2.button("❌ Cancelar Carga")
+
+    # Si alguien cancela, limpiamos los datos y recargamos
+    if btn_cancelar:
+        st.session_state['staging_data'] = pd.DataFrame()
+        st.rerun()
+
+    # Si alguien presiona Guardar...
+    if btn_guardar:
+        # 1. ¡DESAPARECEMOS LA TABLA Y BOTONES AL INSTANTE PARA BLOQUEAR LA PANTALLA!
+        zona_edicion.empty() 
+        
+        # 2. Mostramos el proceso de guardado sin que nada más estorbe
+        with st.spinner("Conectando a la base de datos en la nube..."):
+            conn = conectar_bd()
+            cur = conn.cursor()
+            
+        total_filas = len(df_editado)
+        barra_progreso = st.progress(0)
+        texto_progreso = st.empty() 
+        
+        for i, (_, row_fin) in enumerate(df_editado.iterrows()):
+            texto_progreso.text(f"⏳ Guardando movimiento {i + 1} de {total_filas}...")
+            barra_progreso.progress(int(((i + 1) / total_filas) * 100))
+            
             p_calc = obtener_periodo(str(row_fin['fecha'])[:10])
-            cur.execute("INSERT INTO movimientos (tipo, categoria, monto, fecha, periodo, descripcion) VALUES (%s, %s, %s, %s, %s, %s)",
-                        (row_fin['tipo'], row_fin['categoria'], row_fin['monto'], str(row_fin['fecha'])[:10], p_calc, row_fin['descripcion']))
+            cur.execute("INSERT INTO movimientos (tipo, categoria, monto, fecha, periodo, descripcion, origen) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                        (row_fin['tipo'], row_fin['categoria'], row_fin['monto'], str(row_fin['fecha'])[:10], p_calc, row_fin['descripcion'], row_fin.get('origen', 'Manual')))
+        
         conn.commit()
         cur.close()
         conn.close()
         
+        texto_progreso.empty()
+        barra_progreso.empty()
         st.session_state['staging_data'] = pd.DataFrame() 
-        st.success(f"¡{len(df_editado)} movimientos cargados!")
-        st.rerun()
+        st.success(f"¡{total_filas} movimientos cargados a tu base de datos!")
         
-    if c_bot2.button("❌ Cancelar Carga"):
-        st.session_state['staging_data'] = pd.DataFrame() 
+        time.sleep(1.5) 
         st.rerun()

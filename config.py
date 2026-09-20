@@ -3,13 +3,14 @@ from datetime import datetime
 
 DIA_CORTE = 25
 
-CATEGORIAS_INGRESOS_BASE = ["Sueldo", "Sueldo Esposa", "Ayuda Papá (Colegio)", "Otros Ingresos"]
+CATEGORIAS_INGRESOS_BASE = ["Sueldo", "Sueldo Esposa", "Ayuda Papá (Colegio)", "Otros Ingresos", "Transferencia Interna"]
 CATEGORIAS_GASTOS = [
     "Hipoteca", "Mantenimiento + agua", "Luz", "Gas Pa", "Gas Paul",
     "Internet", "Celular Paul", "Celular Fiorella", "Colegio Joanne", "Colegio Joaquin",
     "Comida", "Supermercado", "Mercado", "Pasajes Paul", "Pasajes Fiorella",
     "Mapfre", "Prestamo personal (banco)", "Prestamo Yape", "Mapfre deuda",
-    "Prestamo Makoto", "Prestamo Mamá", "Prestamo Hijos", "Otros Gastos"
+    "Prestamo Makoto", "Prestamo Mamá", "Prestamo Hijos", "Transferencia Interna", 
+    "Intereses", "Otros Gastos" # <-- AQUÍ ESTÁ INTERESES
 ]
 CATEGORIAS_AHORRO = ["Fondo de Emergencia", "Plazo Fijo", "Caja de Ahorros", "Inversiones"]
 DEUDAS_CATEGORIAS = ["Hipoteca", "Prestamo personal (banco)", "Prestamo Yape", "Mapfre deuda", "Prestamo Makoto", "Prestamo Mamá", "Prestamo Hijos"]
